@@ -21,9 +21,6 @@ jobs:
           cmake ..
           cmake --build .
           cmake --install .
-      - name: Ad-hoc Code Sign
-        run: |
-          codesign --force --deep -s - build/*.app
       - name: Archive App Bundle
         uses: actions/upload-artifact@v4
         with:

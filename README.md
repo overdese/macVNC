@@ -32,6 +32,11 @@ macVNC uses CMake, thus after installing build dependencies it's:
 
 # Running
 
+Before running, you need to sign the app bundle (Ad-hoc):
+
+    xattr -cr macVNC.app
+    codesign --force --deep -s - macVNC.app
+
 As you might have Apple's Remote Desktop Server already running (which occupies port 5900),
 you can run macVNC via
 
