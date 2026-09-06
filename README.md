@@ -13,6 +13,7 @@ GPL dump by AT&T Cambridge.
 * Fully multi-threaded.
 * Double-buffering for framebuffer updates.
 * Mouse and keyboard input.
+* Clipboard sharing in both directions.
 * Multi-monitor support.
 
 # Building
@@ -39,6 +40,10 @@ you can run macVNC via
 In its default setup, macVNC does mouse and keyboard input. For this, it needs certain system permissions.
 It tells you on first run if these are missing; you can set up permissions via 'System Preferences'->'Security & Privacy'->'Privacy'->'Accessibility'.
 Note that if launched from Terminal, the entry shown will be 'Terminal', not 'macVNC'.
+
+Clipboard contents are shared in both directions by default; use `-noclipboard` to disable this.
+As per the RFB protocol, clipboard text is transferred as Latin-1, so characters outside that range
+(emoji, Cyrillic, CJK) cannot be transferred.
 
 Note that setting a password is mandatory in case you want to access the server using MacOS's built-in Screen Sharing app.
 You can do so via the `-passwd` commandline argument.

@@ -23,6 +23,7 @@ find_library(SCREEN_CAPTURE_KIT ScreenCaptureKit REQUIRED)
 find_library(CORE_MEDIA CoreMedia)
 find_library(CORE_VIDEO CoreVideo)
 find_library(FOUNDATION Foundation)
+find_library(APPKIT AppKit)
 
 #
 # Sources
@@ -48,7 +49,8 @@ target_link_libraries(${PROJECT_NAME} LibVNCServer::vncserver ${CMAKE_THREAD_LIB
   ${SCREEN_CAPTURE_KIT}
   ${CORE_MEDIA}
   ${CORE_VIDEO}
-  ${FOUNDATION})
+  ${FOUNDATION}
+  ${APPKIT})
 
 #
 # Install, i.e. finalise bundle
