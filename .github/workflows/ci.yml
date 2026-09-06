@@ -43,7 +43,7 @@ jobs:
         run: |
           cd dist
           mv *.app "macVNC-${{ github.ref_name }}.app"
-          zip -r "../macVNC-${{ github.ref_name }}.zip" "macVNC-${{ github.ref_name }}.app"
+          zip -r "macVNC-${{ github.ref_name }}.zip" "macVNC-${{ github.ref_name }}.app"
       - name: Create Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
