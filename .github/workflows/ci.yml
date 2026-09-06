@@ -2,12 +2,13 @@ name: CI
 
 on:
   push:
-  pull_request:
+    branches: [main-overdese]
+    tags: ['*']
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v3
       - name: Install Build Dependencies
@@ -20,6 +21,9 @@ jobs:
           cmake ..
           cmake --build .
           cmake --install .
+      - name: Ad-hoc Code Sign
+        run: |
+          codesign --force --deep -s - build/*.app
       - name: Archive App Bundle
         uses: actions/upload-artifact@v4
         with:
