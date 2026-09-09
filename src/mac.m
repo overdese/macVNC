@@ -37,12 +37,15 @@
 #include <pthread.h>
 #include <stdlib.h>
 
+#import <AppKit/AppKit.h>
+
 #import "ScreenCapturer.h"
 
 /* The main LibVNCServer screen object */
 rfbScreenInfoPtr rfbScreen;
 /* Operation modes set by CLI options */
 rfbBool viewOnly = FALSE;
+rfbBool noClipboard = FALSE;
 
 /* Two framebuffers. */
 void *frameBufferOne;
@@ -506,6 +509,98 @@ rfbBool keyboardInit()
 }
 
 
+/*
+  Clipboard (RFB "cut text") support.
+
+  The RFB protocol specifies cut text to be Latin-1 encoded, which is what
+  clients on Windows send and expect, so we convert to and from that.
+  pasteboardChangeCount tracks what we last saw or wrote ourselves in order to
+  not bounce a client's clipboard right back at it.
+*/
+static NSInteger pasteboardChangeCount = -1;
+static pthread_mutex_t clipboard_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/*
+  Client sent us its clipboard contents; put them onto the local pasteboard.
+  Not called on the main thread.
+*/
+void
+SetXCutText(char *str, int len, struct _rfbClientRec *cl)
+{
+    if(noClipboard || cl->viewOnly || len <= 0)
+        return;
+
+    @autoreleasepool {
+        NSString *text = [[[NSString alloc] initWithBytes:str
+                                                  length:len
+                                                encoding:NSISOLatin1StringEncoding] autorelease];
+        if(!text)
+            return;
+
+        pthread_mutex_lock(&clipboard_mutex);
+        {
+            NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+            [pasteboard clearContents];
+            [pasteboard setString:text forType:NSPasteboardTypeString];
+            /* Remember our own change so the monitor does not send it back. */
+            pasteboardChangeCount = [pasteboard changeCount];
+        }
+        pthread_mutex_unlock(&clipboard_mutex);
+    }
+}
+
+/*
+  Watch the local pasteboard and forward changes to all connected clients.
+  NSPasteboard has no change notification, so polling is the only option.
+*/
+static void *
+clipboardMonitor(void *arg)
+{
+    while(1) {
+        @autoreleasepool {
+            NSString *text = nil;
+
+            pthread_mutex_lock(&clipboard_mutex);
+            {
+                NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
+                NSInteger changeCount = [pasteboard changeCount];
+                if(changeCount != pasteboardChangeCount) {
+                    pasteboardChangeCount = changeCount;
+                    text = [[[pasteboard stringForType:NSPasteboardTypeString] copy] autorelease];
+                }
+            }
+            pthread_mutex_unlock(&clipboard_mutex);
+
+            if(text) {
+                NSData *latin1 = [text dataUsingEncoding:NSISOLatin1StringEncoding
+                                    allowLossyConversion:YES];
+                if(latin1 && [latin1 length] > 0)
+                    rfbSendServerCutText(rfbScreen, (char *)[latin1 bytes], (int)[latin1 length]);
+            }
+        }
+
+        usleep(500 * 1000);
+    }
+
+    return NULL;
+}
+
+static void
+clipboardInit(void)
+{
+    pthread_t thread;
+
+    /* Do not send the pasteboard contents that predate server startup. */
+    pasteboardChangeCount = [[NSPasteboard generalPasteboard] changeCount];
+
+    if(pthread_create(&thread, NULL, clipboardMonitor, NULL) != 0) {
+        rfbErr("Could not start clipboard monitor thread, clipboard will be receive-only.\n");
+        return;
+    }
+    pthread_detach(thread);
+}
+
+
 rfbBool
 ScreenInit(int argc, char**argv)
 {
@@ -561,6 +656,8 @@ ScreenInit(int argc, char**argv)
 
   rfbScreen->ptrAddEvent = PtrAddEvent;
   rfbScreen->kbdAddEvent = KbdAddEvent;
+  if(!noClipboard)
+      rfbScreen->setXCutText = SetXCutText;
 
   ScreenCapturer *capturer = [[ScreenCapturer alloc] initWithDisplay: displayID
                                                         frameHandler:^(CMSampleBufferRef sampleBuffer) {
@@ -658,6 +755,8 @@ int main(int argc,char *argv[])
   for(i=argc-1;i>0;i--)
     if(strcmp(argv[i],"-viewonly")==0) {
       viewOnly=TRUE;
+    } else if(strcmp(argv[i],"-noclipboard")==0) {
+      noClipboard=TRUE;
     } else if(strcmp(argv[i],"-display")==0) {
 	displayNumber = atoi(argv[i+1]);
     } else if(strcmp(argv[i],"-h") == 0 || strcmp(argv[i],"--help") == 0)  {
@@ -685,6 +784,9 @@ int main(int argc,char *argv[])
   if(!ScreenInit(argc,argv))
       exit(1);
   rfbScreen->newClientHook = newClient;
+
+  if(!noClipboard)
+      clipboardInit();
 
   rfbRunEventLoop(rfbScreen,-1,TRUE);
 

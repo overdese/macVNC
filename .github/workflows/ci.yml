@@ -1,10 +1,14 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main-overdese]
+    tags: ['*']
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v3
       - name: Install Build Dependencies
@@ -22,3 +26,30 @@ jobs:
         with:
           name: macVNC App Bundle
           path: build/*.app
+
+  release:
+    needs: build
+    runs-on: macos-15
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download App Bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: macVNC App Bundle
+          path: dist
+      - name: Package App Bundle
+        run: |
+          cd dist
+          mv *.app "macVNC-${{ github.ref_name }}.app"
+          zip -r "macVNC-${{ github.ref_name }}.zip" "macVNC-${{ github.ref_name }}.app"
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          gh release create "${{ github.ref_name }}" "macVNC-${{ github.ref_name }}.zip" \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}"
+
