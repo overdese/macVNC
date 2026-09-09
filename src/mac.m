@@ -167,7 +167,10 @@ static int specialKeyMap[] = {
 
 /* Global shifting modifier states */
 rfbBool isShiftDown;
-rfbBool isAltGrDown;
+rfbBool isControlDown;
+rfbBool isOptionDown;    /* Left Option (from Meta/Super keysyms) */
+rfbBool isAltGrDown;     /* Right Option (Alt-Gr) */
+rfbBool isCommandDown;   /* From Alt keysyms, which map to Command */
 
 
 static int
@@ -351,13 +354,37 @@ KbdAddEvent(rfbBool down, rfbKeySym keySym, struct _rfbClientRec* cl)
     }
 
     if(specialKeyFound) {
+	/* Which tracked modifier (if any) this keysym corresponds to. */
+	rfbBool *modifierState = NULL;
+	if(keySym == XK_Shift_L || keySym == XK_Shift_R)
+	    modifierState = &isShiftDown;
+	else if(keySym == XK_Control_L || keySym == XK_Control_R)
+	    modifierState = &isControlDown;
+	else if(keySym == XK_Meta_L || keySym == XK_Meta_R || keySym == XK_Super_L || keySym == XK_Super_R)
+	    modifierState = &isOptionDown;
+	else if(keySym == XK_ISO_Level3_Shift)
+	    modifierState = &isAltGrDown;
+	else if(keySym == XK_Alt_L || keySym == XK_Alt_R)
+	    modifierState = &isCommandDown;
+
+	if(modifierState && down && *modifierState) {
+	    /* We already believe this modifier is held down, so its matching key-up must
+	       have gone missing (dropped packet, or the client's OS swallowing it for its
+	       own global hotkey -- e.g. Windows' own Ctrl+Shift/Alt+Shift layout switcher).
+	       Release it first so the stale press can't keep compounding: left alone, a
+	       stuck modifier silently alters every keystroke that follows (an ordinary
+	       Space becomes Ctrl+Space, which MacOS's Input Source shortcut turns into an
+	       unwanted keyboard layout switch). */
+	    CGEventRef resyncKeyUp = CGEventCreateKeyboardEvent(eventSource, keyCode, FALSE);
+	    CGEventPost(kCGSessionEventTap, resyncKeyUp);
+	    CFRelease(resyncKeyUp);
+	}
+
 	/* keycode for special key found */
 	keyboardEvent = CGEventCreateKeyboardEvent(eventSource, keyCode, down);
 	/* save state of shifting modifiers */
-	if(keySym == XK_ISO_Level3_Shift)
-	    isAltGrDown = down;
-	if(keySym == XK_Shift_L || keySym == XK_Shift_R)
-	    isShiftDown = down;
+	if(modifierState)
+	    *modifierState = down;
 
     } else {
 	/* look for char key */
@@ -383,15 +410,19 @@ KbdAddEvent(rfbBool down, rfbKeySym keySym, struct _rfbClientRec* cl)
 	CFRelease(charStr);
     }
 
-    /* Set the Shift modifier explicitly as MacOS sometimes gets internal state wrong and Shift stuck.
-       Only the Shift bit is touched here; other modifier flags already present on the event
-       (Control, Command, Option, ...) must be preserved. */
+    /* Explicitly (re)assert every modifier flag we're tracking on the outgoing event instead of
+       trusting whatever the OS's internal state currently believes -- MacOS sometimes gets that
+       internal state wrong and a modifier gets stuck. This also stops a modifier that is still
+       (wrongly) stuck down from leaking its flag onto unrelated keystrokes. Only these bits are
+       touched; anything else already on the event (CapsLock, Fn, numeric pad, ...) is preserved. */
     {
         CGEventFlags flags = CGEventGetFlags(keyboardEvent);
-        if(isShiftDown)
-            flags |= kCGEventFlagMaskShift;
-        else
-            flags &= ~kCGEventFlagMaskShift;
+
+        flags = isShiftDown ? (flags | kCGEventFlagMaskShift) : (flags & ~kCGEventFlagMaskShift);
+        flags = isControlDown ? (flags | kCGEventFlagMaskControl) : (flags & ~kCGEventFlagMaskControl);
+        flags = (isOptionDown || isAltGrDown) ? (flags | kCGEventFlagMaskAlternate) : (flags & ~kCGEventFlagMaskAlternate);
+        flags = isCommandDown ? (flags | kCGEventFlagMaskCommand) : (flags & ~kCGEventFlagMaskCommand);
+
         CGEventSetFlags(keyboardEvent, flags);
     }
 
@@ -434,7 +465,10 @@ releaseAllModifiers(void)
     }
 
     isShiftDown = FALSE;
+    isControlDown = FALSE;
+    isOptionDown = FALSE;
     isAltGrDown = FALSE;
+    isCommandDown = FALSE;
 }
 
 /* Synthesize a mouse event. This is not called on the main thread due to rfbRunEventLoop(..,..,TRUE), but it works. */
