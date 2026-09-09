@@ -150,6 +150,8 @@ static int specialKeyMap[] = {
     XK_Control_R,         59,      /* Ctrl Right */
     XK_Meta_L,            58,      /* Logo Left (-> Option) */
     XK_Meta_R,            58,      /* Logo Right (-> Option) */
+    XK_Super_L,           58,      /* Windows key Left (-> Option) */
+    XK_Super_R,           58,      /* Windows key Right (-> Option) */
     XK_Alt_L,             55,      /* Alt Left (-> Command) */
     XK_Alt_R,             55,      /* Alt Right (-> Command) */
     XK_ISO_Level3_Shift,  61,      /* Alt-Gr (-> Option Right) */
@@ -381,11 +383,58 @@ KbdAddEvent(rfbBool down, rfbKeySym keySym, struct _rfbClientRec* cl)
 	CFRelease(charStr);
     }
 
-    /* Set the Shift modifier explicitly as MacOS sometimes gets internal state wrong and Shift stuck. */
-    CGEventSetFlags(keyboardEvent, CGEventGetFlags(keyboardEvent) & (isShiftDown ? kCGEventFlagMaskShift : ~kCGEventFlagMaskShift));
+    /* Set the Shift modifier explicitly as MacOS sometimes gets internal state wrong and Shift stuck.
+       Only the Shift bit is touched here; other modifier flags already present on the event
+       (Control, Command, Option, ...) must be preserved. */
+    {
+        CGEventFlags flags = CGEventGetFlags(keyboardEvent);
+        if(isShiftDown)
+            flags |= kCGEventFlagMaskShift;
+        else
+            flags &= ~kCGEventFlagMaskShift;
+        CGEventSetFlags(keyboardEvent, flags);
+    }
 
     CGEventPost(kCGSessionEventTap, keyboardEvent);
     CFRelease(keyboardEvent);
+}
+
+/*
+  Force-release every modifier key at the OS level.
+
+  Modifier key-up events can go missing if a client drops its connection (network
+  hiccup, client crash, sleep/wake, ...) while a modifier is held down: the server
+  never receives the matching key-up, so the private event source keeps treating
+  the key as pressed forever. Left unchecked this leaves e.g. Ctrl "stuck" down,
+  which then turns an innocuous later Space keypress into the system's "select
+  next input source" shortcut -- repeatedly cycling the keyboard layout, which is
+  how a stuck Ctrl ends up looking like text randomly switching to Arabic (or
+  whatever other input source is installed) minutes later.
+
+  Called whenever a client goes away and when a new one connects, so a previous
+  client's leftover state can never carry over either.
+*/
+static void
+releaseAllModifiers(void)
+{
+    static const CGKeyCode modifierKeyCodes[] = {
+        56, /* Shift */
+        59, /* Control */
+        58, /* Option (Meta) */
+        55, /* Command (Alt) */
+        61, /* Alt-Gr / Right Option */
+        63, /* Fn */
+    };
+    size_t i;
+
+    for(i = 0; i < sizeof(modifierKeyCodes) / sizeof(modifierKeyCodes[0]); ++i) {
+        CGEventRef keyUp = CGEventCreateKeyboardEvent(eventSource, modifierKeyCodes[i], FALSE);
+        CGEventPost(kCGSessionEventTap, keyUp);
+        CFRelease(keyUp);
+    }
+
+    isShiftDown = FALSE;
+    isAltGrDown = FALSE;
 }
 
 /* Synthesize a mouse event. This is not called on the main thread due to rfbRunEventLoop(..,..,TRUE), but it works. */
@@ -737,13 +786,17 @@ ScreenInit(int argc, char**argv)
 
 void clientGone(rfbClientPtr cl)
 {
-    //TODO
+    /* Don't leave modifiers stuck down if the client disconnected mid keypress. */
+    releaseAllModifiers();
 }
 
 enum rfbNewClientAction newClient(rfbClientPtr cl)
 {
   cl->clientGoneHook = clientGone;
   cl->viewOnly = viewOnly;
+
+  /* Guard against leftover stuck modifiers from a previous client's ungraceful disconnect. */
+  releaseAllModifiers();
 
   return(RFB_CLIENT_ACCEPT);
 }
